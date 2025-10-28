@@ -18,6 +18,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Aws.GameLift;
 using Aws.GameLift.Server;
 using Aws.GameLift.Server.Model;
 using Moq;
@@ -31,7 +32,7 @@ namespace Aws.GameLift.Tests.Server
     [TestFixture]
     public class ServerStateTest
     {
-        private const string SdkVersion = "5.3.0";
+        private const string SdkVersion = "5.4.0";
         private const string SdkToolName = "testSdkToolName";
         private const string SdkToolVersion = "1.0.0";
         private const string EnvironmentVariableWebsocketUrl = "GAMELIFT_SDK_WEBSOCKET_URL";
@@ -1841,6 +1842,157 @@ namespace Aws.GameLift.Tests.Server
         {
             Assert.IsTrue(outcome.Success);
             Assert.IsNull(outcome.Error);
+        }
+
+        [Test]
+        public void GIVEN_validMetricsParameters_WHEN_initializeMetrics_THEN_returnsSuccess()
+        {
+            // Given
+            var statsdHost = "localhost";
+            var statsdPort = 8125;
+            var crashHost = "crash-host";
+            var crashPort = 8126;
+            var flushInterval = 5000;
+            var maxPacketSize = 1024;
+
+            var parameters = new MetricsParameters(statsdHost, statsdPort, crashHost, crashPort, flushInterval, maxPacketSize);
+
+            // When
+            var outcome = ServerState.Instance.InitializeMetrics(parameters);
+
+            // Then
+            Assert.IsTrue(outcome.Success);
+            Assert.IsNotNull(outcome.Result);
+            Assert.IsNull(outcome.Error);
+
+            // Verify that the provided parameters were used
+            var usedParameters = ServerState.Instance._metricsParameters;
+            Assert.IsNotNull(usedParameters, "_metricsParameters should be set");
+            Assert.AreEqual(statsdHost, usedParameters.StatsdHost);
+            Assert.AreEqual(statsdPort, usedParameters.StatsdPort);
+            Assert.AreEqual(crashHost, usedParameters.CrashReporterHost);
+            Assert.AreEqual(crashPort, usedParameters.CrashReporterPort);
+            Assert.AreEqual(flushInterval, usedParameters.FlushIntervalMs);
+            Assert.AreEqual(maxPacketSize, usedParameters.MaxPacketSize);
+        }
+
+        [Test]
+        public void GIVEN_nullMetricsParameters_WHEN_initializeMetrics_THEN_usesDefaults()
+        {
+            // Given
+            // No parameters provided - should use defaults
+
+            // When
+            var outcome = ServerState.Instance.InitializeMetrics();
+
+            // Then
+            Assert.IsTrue(outcome.Success);
+            Assert.IsNotNull(outcome.Result);
+            Assert.IsNull(outcome.Error);
+
+            // Verify that default values were used via the testing field
+            var usedParameters = ServerState.Instance._metricsParameters;
+            Assert.IsNotNull(usedParameters, "_metricsParameters should be set");
+            Assert.AreEqual(GameLiftConstants.DefaultStatsdHost, usedParameters.StatsdHost);
+            Assert.AreEqual(GameLiftConstants.DefaultStatsdPort, usedParameters.StatsdPort);
+            Assert.AreEqual(GameLiftConstants.DefaultMaxPacketSize, usedParameters.MaxPacketSize);
+        }
+
+        [Test]
+        public void GIVEN_nullMetricsParametersWithEnvVars_WHEN_initializeMetrics_THEN_usesEnvOverrides()
+        {
+            // Given
+            var envHost = "127.0.0.1"; // Different from default but still resolvable
+            var envCrashPort = 9126;
+
+            UsingEnvironmentVariables(
+                new Dictionary<string, string>
+                {
+                    [GameLiftConstants.EnvironmentVariableStatsdHost] = envHost,
+                    [GameLiftConstants.EnvironmentVariableCrashReporterPort] = envCrashPort.ToString(),
+                },
+                () =>
+                {
+                    // When
+                    var outcome = ServerState.Instance.InitializeMetrics();
+
+                    // Then
+                    if (!outcome.Success)
+                    {
+                        Assert.Fail($"InitializeMetrics failed: {outcome.Error?.ErrorMessage}");
+                    }
+
+                    Assert.IsTrue(outcome.Success);
+                    Assert.IsNotNull(outcome.Result);
+                    Assert.IsNull(outcome.Error);
+
+                    // Verify that environment variables overrode defaults
+                    var usedParameters = ServerState.Instance._metricsParameters;
+                    Assert.IsNotNull(usedParameters, "_metricsParameters should be set");
+                    Assert.AreEqual(envHost, usedParameters.StatsdHost);
+                    Assert.AreEqual(GameLiftConstants.DefaultStatsdPort, usedParameters.StatsdPort);
+                    Assert.AreEqual(GameLiftConstants.DefaultCrashReporterHost, usedParameters.CrashReporterHost);
+                    Assert.AreEqual(envCrashPort, usedParameters.CrashReporterPort);
+                    // Non-overridden values should still be defaults
+                    Assert.AreEqual(GameLiftConstants.DefaultMaxPacketSize, usedParameters.MaxPacketSize);
+                });
+        }
+
+        [Test]
+        public void GIVEN_invalidMetricsParameters_WHEN_initializeMetrics_THEN_returnsError()
+        {
+            // Given
+            var parameters = new MetricsParameters(null, 8125, "crash-host", 8126, 5000, 1024);
+
+            // When
+            var outcome = ServerState.Instance.InitializeMetrics(parameters);
+
+            // Then
+            Assert.IsFalse(outcome.Success);
+            Assert.IsNull(outcome.Result);
+            Assert.IsNotNull(outcome.Error);
+            Assert.AreEqual(GameLiftErrorType.VALIDATION_EXCEPTION, outcome.Error.ErrorType);
+        }
+
+        [Test]
+        public void GIVEN_metricsInitialized_WHEN_shutdown_THEN_logsMetricsDisposed()
+        {
+            // Given
+            var serverState = new ServerState(mockWebSocket.Object, mockRequestHandler.Object, mockEnvironment.Object);
+
+            // Initialize metrics to create a metrics manager
+            var parameters = new MetricsParameters("localhost", 8125, "localhost", 8126, 5000, 1024);
+            var initOutcome = serverState.InitializeMetrics(parameters);
+            Assert.IsTrue(initOutcome.Success, "Metrics initialization should succeed");
+
+            // Set up log4net memory appender to capture log messages
+            var memoryAppender = new log4net.Appender.MemoryAppender();
+            var repository = log4net.LogManager.GetRepository();
+
+            // Configure the root logger to DEBUG level to capture the disposal message
+            var rootLogger = ((log4net.Repository.Hierarchy.Hierarchy)repository).Root;
+            rootLogger.Level = log4net.Core.Level.Debug;
+            rootLogger.AddAppender(memoryAppender);
+            memoryAppender.ActivateOptions();
+            repository.Configured = true;
+
+            // When
+            serverState.Shutdown();
+
+            // Then - Check that the log contains the disposal message
+            var logEvents = memoryAppender.GetEvents();
+            bool disposalLogFound = false;
+
+            foreach (var logEvent in logEvents)
+            {
+                if (logEvent.RenderedMessage.Contains("Metrics manager disposed."))
+                {
+                    disposalLogFound = true;
+                    break;
+                }
+            }
+
+            Assert.IsTrue(disposalLogFound, "Expected log message was not found");
         }
     }
 }

@@ -1,0 +1,1 @@
+- Adds support for publishing built-in and custom telemetry metrics, with pre-built dashboards for visualizing usage data.

@@ -27,7 +27,7 @@ namespace Aws.GameLift.Tests.Server
 
             // Then
             Assert.IsTrue(outcome.Success);
-            Assert.AreEqual("5.3.0", outcome.Result);
+            Assert.AreEqual("5.4.0", outcome.Result);
         }
     }
 }

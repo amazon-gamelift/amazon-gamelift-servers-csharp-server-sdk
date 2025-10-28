@@ -45,13 +45,14 @@ namespace Aws.GameLift
                     }
 
                     return new GenericOutcome(new GameLiftError(
-                        GameLiftErrorType.VALIDATION_EXCEPTION, 
+                        GameLiftErrorType.VALIDATION_EXCEPTION,
                         string.Format("{0} is invalid. Length must be between {1} and {2} characters.", fieldName, minLength, maxLength)));
                 }
 
                 if (regex != null && !regex.IsMatch(input))
                 {
-                    if (overrideErrorMessage != null) {
+                    if (overrideErrorMessage != null)
+                    {
                         return new GenericOutcome(new GameLiftError(
                             GameLiftErrorType.VALIDATION_EXCEPTION, overrideErrorMessage));
                     }
