@@ -92,6 +92,11 @@ public class GameLiftServerExampleBehavior
             ProcessParameters processParameters = new ProcessParameters(
                 (GameSession gameSession) =>
                 {
+                    // IMPORTANT: If you are using the MetricsManager, call OnGameSessionStart here
+                    // to tag subsequent metrics with this session ID.
+                    // Assume you have an instance named 'metricsManager':
+                    // metricsManager.OnGameSessionStart(gameSession);
+
                     //When a game session is created, Amazon GameLift Servers sends an activation request to the game server and passes along the game session object containing game properties and other settings.
                     //Here is where a game server should take action based on the game session object.
                     //Once the game server is ready to receive incoming player connections, it should invoke GameLiftServerAPI.ActivateGameSession()
@@ -150,7 +155,7 @@ public class GameLiftServerExampleBehavior
     {
         //Make sure to call GameLiftServerAPI.Destroy() when the application quits.
         //This frees the server SDK from memory.
-  		//As a best practice, call this method after ProcessEnding() and before terminating the process.
+        //As a best practice, call this method after ProcessEnding() and before terminating the process.
         GameLiftServerAPI.Destroy();
     }
 }
@@ -158,6 +163,11 @@ public class GameLiftServerExampleBehavior
 
 ### Using the SDK in Unity
 
-We recommend using the Amazon GameLift Servers plugin for Unity. It is a lightweight plugin that provides the same SDK functionalities and supports Unity Package Manager.
+We recommend using the Amazon GameLift Servers SDK for Unity. It is a lightweight plugin that provides the same SDK functionalities and supports Unity Package Manager.
 
-You can find the tarball and setup instructions in the Unity bundle.
+You can find the tarball and setup instructions in the [amazon-gamelift-plugin-unity repo](https://github.com/amazon-gamelift/amazon-gamelift-plugin-unity).
+
+## Metrics
+
+This SDK enables the feature to collect and ship telemetry metrics from your game servers hosted on Amazon GameLift Servers to
+AWS services for monitoring and observability. For detailed setup and usage instructions, see [METRICS.md](./telemetry-metrics/METRICS.md).

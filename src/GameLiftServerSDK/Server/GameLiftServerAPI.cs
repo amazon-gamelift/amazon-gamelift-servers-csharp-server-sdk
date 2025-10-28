@@ -19,7 +19,7 @@ namespace Aws.GameLift.Server
     public static class GameLiftServerAPI
 #pragma warning restore S101
     {
-        private const string SdkVersion = "5.3.0";
+        private const string SdkVersion = "5.4.0";
 
         /// <summary>
         /// Returns the current version number of the SDK built into the server process.
@@ -96,6 +96,59 @@ namespace Aws.GameLift.Server
 #pragma warning restore S100, S101
         {
             return ServerState.Instance.InitializeNetworking(default);
+        }
+
+        /// <summary>
+        /// Initializes the metrics system with the specified configuration parameters.
+        /// For best results, it's recommended to call this method before InitSDK() to enable metrics collection.
+        /// Uses the provided parameters exactly as specified. To use environment variables or defaults, call InitMetrics() instead.
+        /// </summary>
+        /// <param name="metricsParameters">
+        /// A <see cref="MetricsParameters"/> object containing configuration for metrics collection:
+        /// <list type="bullet">
+        /// <item>StatsD server host and port for metrics reporting</item>
+        /// <item>Crash reporter host and port for crash tracking</item>
+        /// <item>Metrics maximum packet size and flush interval settings</item>
+        /// </list>
+        /// </param>
+        /// <returns>Returns a MetricsOutcome indicating success or failure. If successful, contains the Metrics instance.</returns>
+        /// <example>
+        /// <code>
+        /// var metricsParams = new MetricsParameters("localhost", 8125, "crash-host", 9999, 1000, 1024);
+        /// var outcome = GameLiftServerAPI.InitMetrics(metricsParams);
+        /// if (outcome.Success) {
+        ///     var metrics = outcome.Result;
+        /// }
+        /// </code>
+        /// </example>
+        public static MetricsOutcome InitMetrics(MetricsParameters metricsParameters)
+        {
+            return ServerState.Instance.InitializeMetrics(metricsParameters);
+        }
+
+        /// <summary>
+        /// Initializes the metrics system with default configuration parameters.
+        /// For best results, it's recommended to call this method before InitSDK() to enable metrics collection.
+        /// Uses default values, overridden by environment variables if available.
+        /// </summary>
+        /// <returns>Returns a MetricsOutcome indicating success or failure. If successful, contains the Metrics instance.</returns>
+        /// <example>
+        /// <code>
+        /// // Defaults: localhost:8125 for StatsD, localhost:9999 for crash reporter
+        /// // FlushInterval: 5000ms, MaxPacketSize: 1024 bytes
+        /// // Override with environment variables: GAMELIFT_STATSD_HOST, GAMELIFT_STATSD_PORT, etc.
+        ///
+        /// var outcome = GameLiftServerAPI.InitMetrics();
+        /// if (outcome.Success) {
+        ///     var metrics = outcome.Result;
+        /// } else {
+        ///     Console.WriteLine("Failed to initialize metrics: " + outcome.Error.ErrorMessage);
+        /// }
+        /// </code>
+        /// </example>
+        public static MetricsOutcome InitMetrics()
+        {
+            return ServerState.Instance.InitializeMetrics();
         }
 
         /// <summary>

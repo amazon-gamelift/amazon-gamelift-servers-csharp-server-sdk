@@ -604,5 +604,71 @@ namespace Aws.GameLift.Tests.Server
                     Validation.RoleSessionNameRegex),
                 roleSessionNameInvalidOutcome.Error.ErrorMessage);
         }
+
+        [Test]
+        public void GIVEN_validMetricsParameters_WHEN_validating_THEN_returnsSuccess()
+        {
+            // Given
+            var parameters = new MetricsParameters("localhost", 8125, "crash-host", 8126, 5000, 1024);
+
+            // When
+            var outcome = Validation.ValidateMetricsParameters(parameters);
+
+            // Then
+            Assert.IsTrue(outcome.Success);
+            Assert.IsNull(outcome.Error);
+        }
+
+        [Test]
+        public void GIVEN_invalidMetricsParameters_WHEN_validating_THEN_returnsError()
+        {
+            // Given - invalid StatsdPort (too high)
+            var invalidStatsdPort = new MetricsParameters("localhost", 70000, "crash-host", 8126, 5000, 1024);
+
+            // Given - negative StatsdPort
+            var negativeStatsdPort = new MetricsParameters("localhost", -1, "crash-host", 8126, 5000, 1024);
+
+            // Given - invalid CrashReporterPort (too high)
+            var invalidCrashPort = new MetricsParameters("localhost", 8125, "crash-host", 99999, 5000, 1024);
+
+            // Given - negative FlushInterval
+            var negativeFlushInterval = new MetricsParameters("localhost", 8125, "crash-host", 8126, -100, 1024);
+
+            // Given - negative MaxPacketSize
+            var negativeMaxPacketSize = new MetricsParameters("localhost", 8125, "crash-host", 8126, 5000, -512);
+
+            // Given - empty StatsdHost
+            var emptyStatsdHost = new MetricsParameters("", 8125, "crash-host", 8126, 5000, 1024);
+
+            // Given - empty CrashReporterHost
+            var emptyCrashHost = new MetricsParameters("localhost", 8125, "", 8126, 5000, 1024);
+
+            // Given - null StatsdHost
+            var nullStatsdHost = new MetricsParameters(null, 8125, "crash-host", 8126, 5000, 1024);
+
+            // Given - null CrashReporterHost
+            var nullCrashHost = new MetricsParameters("localhost", 8125, null, 8126, 5000, 1024);
+
+            // When
+            var outcomes = new[]
+            {
+                Validation.ValidateMetricsParameters(invalidStatsdPort),
+                Validation.ValidateMetricsParameters(negativeStatsdPort),
+                Validation.ValidateMetricsParameters(invalidCrashPort),
+                Validation.ValidateMetricsParameters(negativeFlushInterval),
+                Validation.ValidateMetricsParameters(negativeMaxPacketSize),
+                Validation.ValidateMetricsParameters(emptyStatsdHost),
+                Validation.ValidateMetricsParameters(emptyCrashHost),
+                Validation.ValidateMetricsParameters(nullStatsdHost),
+                Validation.ValidateMetricsParameters(nullCrashHost),
+            };
+
+            // Then
+            foreach (var outcome in outcomes)
+            {
+                Assert.IsFalse(outcome.Success);
+                Assert.AreEqual(GameLiftErrorType.VALIDATION_EXCEPTION, outcome.Error.ErrorType);
+            }
+        }
     }
 }

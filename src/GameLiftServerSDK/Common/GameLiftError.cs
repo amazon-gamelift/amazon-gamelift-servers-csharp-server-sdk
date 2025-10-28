@@ -28,6 +28,8 @@ namespace Aws.GameLift
         WEBSOCKET_CONNECT_FAILURE_TIMEOUT,          // A call to an AWS service has timed out.
         TERMINATION_TIME_NOT_SET,
         VALIDATION_EXCEPTION,                       // Invalid input parameter.
+        METRICS_CONFIGURATION_FAILED,               // Failed to configure or define metrics.
+        METRICS_SUBMISSION_FAILED,                  // Failed to submit or send metrics data.
     }
 
     public class GameLiftError
@@ -105,6 +107,10 @@ namespace Aws.GameLift
                     return "Termination time is not set";
                 case GameLiftErrorType.VALIDATION_EXCEPTION:
                     return "Validation exception";
+                case GameLiftErrorType.METRICS_CONFIGURATION_FAILED:
+                    return "Metrics configuration failed";
+                case GameLiftErrorType.METRICS_SUBMISSION_FAILED:
+                    return "Metrics submission failed";
                 default:
                     return "Unknown Error";
             }
@@ -144,6 +150,10 @@ namespace Aws.GameLift
                     return "Termination time is not set because a game session has not started.";
                 case GameLiftErrorType.VALIDATION_EXCEPTION:
                     return "Validation exception";
+                case GameLiftErrorType.METRICS_CONFIGURATION_FAILED:
+                    return "Failed to configure or define metrics. Check metric parameters and configuration.";
+                case GameLiftErrorType.METRICS_SUBMISSION_FAILED:
+                    return "Failed to submit or send metrics data. Check network connectivity and StatsD configuration.";
                 default:
                     return "An unexpected error has occurred.";
             }

@@ -12,6 +12,7 @@
 
 using System;
 using System.Net;
+using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,8 +30,6 @@ namespace Aws.GameLift.Tests.Server
     [TestFixture]
     public class GameLiftWebSocketTest
     {
-        private static readonly int PORT = 4649;
-        private static readonly string WEBSOCKET_URL = $"ws://localhost:{PORT}/Echo";
         private static readonly string IDEMPOTENCY_TOKEN_PATTERN =
             "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
         private static readonly TimeSpan DEFAULT_WAIT_TIME = TimeSpan.FromSeconds(5);
@@ -57,13 +56,13 @@ namespace Aws.GameLift.Tests.Server
             {
                 using (var webSocket = new GameLiftWebSocket(mockServerState.Object))
                 {
-                    webSocket.Connect(WEBSOCKET_URL);
+                    webSocket.Connect(echoHttpServer.WebSocketUrl);
                     Assert.IsTrue(webSocket.IsConnected());
-                    
+
                     // Verify IdempotencyToken is passed in the URL
                     string idempotencyToken = echoHttpServer.getIdempotencyToken();
                     Assert.IsNotEmpty(idempotencyToken);
-                    Assert.IsTrue(Regex.IsMatch(idempotencyToken, IDEMPOTENCY_TOKEN_PATTERN, RegexOptions.IgnoreCase), 
+                    Assert.IsTrue(Regex.IsMatch(idempotencyToken, IDEMPOTENCY_TOKEN_PATTERN, RegexOptions.IgnoreCase),
                         $"Token '{idempotencyToken}' does not match expected UUID format");
                 }
             }
@@ -74,9 +73,9 @@ namespace Aws.GameLift.Tests.Server
         {
             using (var webSocket = new GameLiftWebSocket(mockServerState.Object))
             {
-                using (new EchoHttpServer())
+                using (var echoHttpServer = new EchoHttpServer())
                 {
-                    webSocket.Connect(WEBSOCKET_URL);
+                    webSocket.Connect(echoHttpServer.WebSocketUrl);
                     Assert.IsTrue(webSocket.IsConnected());
                 }
 
@@ -90,14 +89,14 @@ namespace Aws.GameLift.Tests.Server
             const string requestId = "requestId";
             const string errorMessage = "error";
 
-            using (new EchoHttpServer())
+            using (var echoHttpServer = new EchoHttpServer())
             {
                 using (var webSocket = new GameLiftWebSocket(mockServerState.Object))
                 {
                     // GIVEN - The test when the request is throttled
                     mockServerState.Setup(state => state.OnErrorResponse(
                         IsAny<string>(), IsAny<int>(), IsAny<string>(), IsAny<string>())).Verifiable();
-                    webSocket.Connect(WEBSOCKET_URL);
+                    webSocket.Connect(echoHttpServer.WebSocketUrl);
                     webSocket.SendMessage(new ResponseMessage
                     {
                         StatusCode = (int)HttpStatusCode.BadRequest,
@@ -120,13 +119,13 @@ namespace Aws.GameLift.Tests.Server
         [Test]
         public void GIVEN_successResponse_WHEN_activateServerProcess_THEN_OnActivateServerProcessCalled()
         {
-            using (new EchoHttpServer())
+            using (var echoHttpServer = new EchoHttpServer())
             {
                 using (var webSocket = new GameLiftWebSocket(mockServerState.Object))
                 {
                     // GIVEN - The test when the request succeeds
                     mockServerState.Setup(state => state.OnActivateServerProcessSuccess(IsAny<string>())).Verifiable();
-                    webSocket.Connect(WEBSOCKET_URL);
+                    webSocket.Connect(echoHttpServer.WebSocketUrl);
                     webSocket.SendMessage(new ResponseMessage
                     {
                         StatusCode = (int)HttpStatusCode.OK,
@@ -146,11 +145,11 @@ namespace Aws.GameLift.Tests.Server
         [Test]
         public void GIVEN_webSocketIsConnected_WHEN_webSocketDisconnects_THEN_webSocketIsDisconnected()
         {
-            using (new EchoHttpServer())
+            using (var echoHttpServer = new EchoHttpServer())
             {
                 using (var webSocket = new GameLiftWebSocket(mockServerState.Object))
                 {
-                    webSocket.Connect(WEBSOCKET_URL);
+                    webSocket.Connect(echoHttpServer.WebSocketUrl);
                     Assert.IsTrue(webSocket.IsConnected());
                     webSocket.Disconnect();
                     Assert.IsFalse(webSocket.IsConnected());
@@ -164,11 +163,19 @@ namespace Aws.GameLift.Tests.Server
             // Attempt to connect will eventually fail once all retry attempts have finished
             // Use a fewer number of retry attempts to prevent this unit test from running for multiple minutes
             const int oneMaxConnectRetries = 1;
+
+            // Get a dynamic URL for the test
+            string testUrl;
+            using (var tempServer = new EchoHttpServer())
+            {
+                testUrl = tempServer.WebSocketUrl;
+            } // Server is disposed here, making the URL unavailable
+
             using (var webSocket = new GameLiftWebSocket(mockServerState.Object, oneMaxConnectRetries))
             {
                 AssertTimeout(
                     AssertIsFalse,
-                    () => webSocket.Connect(WEBSOCKET_URL).Success,
+                    () => webSocket.Connect(testUrl).Success,
                     TimeSpan.FromMinutes(1),
                     "Connect returned a non-success result");
             }
@@ -177,6 +184,13 @@ namespace Aws.GameLift.Tests.Server
         [Test]
         public void GIVEN_serverStartsAfterWebsocket_WHEN_webSocketConnect_THEN_ConnectEventuallyReturnsSuccessful()
         {
+            // Get a dynamic URL for the test
+            string testUrl;
+            using (var tempServer = new EchoHttpServer())
+            {
+                testUrl = tempServer.WebSocketUrl;
+            } // Server is disposed here
+
             // Try to connect in a task thread
             var task = Task.Run(() =>
             {
@@ -184,7 +198,7 @@ namespace Aws.GameLift.Tests.Server
                 {
                     AssertTimeout(
                         AssertIsTrue,
-                        () => webSocket.Connect(WEBSOCKET_URL).Success,
+                        () => webSocket.Connect(testUrl).Success,
                         TimeSpan.FromMinutes(1),
                         "Connect returned a success result");
                 }
@@ -195,7 +209,7 @@ namespace Aws.GameLift.Tests.Server
             Thread.Sleep(TimeSpan.FromSeconds(3));
 
             // Start the server and assert that the connect task completed
-            using (new EchoHttpServer())
+            using (var echoHttpServer = new EchoHttpServer(testUrl))
             {
                 Assert.IsTrue(task.Wait(TimeSpan.FromSeconds(5)), "Task ran to completion");
             }
@@ -204,12 +218,14 @@ namespace Aws.GameLift.Tests.Server
         [Test]
         public void GIVEN_connectedToServer_WHEN_serverGoesOfflineTemporarily_THEN_AutomaticallyReconnectToServer()
         {
+            string testUrl;
             using (var webSocket = new GameLiftWebSocket(mockServerState.Object))
             {
                 // Connect to a server
-                using (new EchoHttpServer())
+                using (var echoHttpServer = new EchoHttpServer())
                 {
-                    webSocket.Connect(WEBSOCKET_URL);
+                    testUrl = echoHttpServer.WebSocketUrl;
+                    webSocket.Connect(testUrl);
                     Assert.IsTrue(webSocket.IsConnected());
                 }
 
@@ -224,7 +240,7 @@ namespace Aws.GameLift.Tests.Server
 
                     // Make the server available again and confirm the websocket connects
                     // Have a longer maximum wait time due to the sleep
-                    using (new EchoHttpServer())
+                    using (var echoHttpServer = new EchoHttpServer(testUrl))
                     {
                         AssertTimeoutWithRetries(
                             AssertIsTrue,
@@ -243,12 +259,14 @@ namespace Aws.GameLift.Tests.Server
         public void GIVEN_connectedToServer_WHEN_serverGoesOfflineLongerThanAllowedMaximum_THEN_NeverReconnectsToServer()
         {
             // Create a websocket that only tries to reconnect once
+            string testUrl;
             using (var webSocket = new GameLiftWebSocket(mockServerState.Object, 1))
             {
                 // Connect to a server
-                using (new EchoHttpServer())
+                using (var echoHttpServer = new EchoHttpServer())
                 {
-                    webSocket.Connect(WEBSOCKET_URL);
+                    testUrl = echoHttpServer.WebSocketUrl;
+                    webSocket.Connect(testUrl);
                     Assert.IsTrue(webSocket.IsConnected());
                 }
 
@@ -259,7 +277,7 @@ namespace Aws.GameLift.Tests.Server
                 Thread.Sleep(TimeSpan.FromSeconds(10));
 
                 // Make the server available again and confirm the websocket never connects because the retries all failed
-                using (new EchoHttpServer())
+                using (var echoHttpServer = new EchoHttpServer(testUrl))
                 {
                     // Wait a few seconds for any possible (non-existent) re-connect logic to run and verify that it is still disconnected
                     Thread.Sleep(DEFAULT_WAIT_TIME);
@@ -290,11 +308,11 @@ namespace Aws.GameLift.Tests.Server
         {
             var messageReceivedEvent = SetupServerOnSuccessResponseReceived();
 
-            using (new EchoHttpServer())
+            using (var echoHttpServer = new EchoHttpServer())
             {
                 using (var webSocket = new GameLiftWebSocket(mockServerState.Object))
                 {
-                    webSocket.Connect(WEBSOCKET_URL);
+                    webSocket.Connect(echoHttpServer.WebSocketUrl);
                     Assert.IsTrue(webSocket.IsConnected());
 
                     // The EchoHttpServer sends the same message back to websocket
@@ -313,11 +331,13 @@ namespace Aws.GameLift.Tests.Server
         {
             var messageReceivedEvent = SetupServerOnSuccessResponseReceived();
 
+            string testUrl;
             using (var webSocket = new GameLiftWebSocket(mockServerState.Object))
             {
-                using (new EchoHttpServer())
+                using (var echoHttpServer = new EchoHttpServer())
                 {
-                    webSocket.Connect(WEBSOCKET_URL);
+                    testUrl = echoHttpServer.WebSocketUrl;
+                    webSocket.Connect(testUrl);
                     Assert.IsTrue(webSocket.IsConnected());
                 }
 
@@ -325,7 +345,7 @@ namespace Aws.GameLift.Tests.Server
                 var sendMessageTask = Task.Run(() => Assert.IsTrue(SendMessageSuccess(webSocket), "SendMessage returned success"));
                 AssertTimeoutWithRetries(AssertIsTrue, () => sendMessageTask.Status == TaskStatus.Running, "SendMessage task is running");
 
-                using (new EchoHttpServer())
+                using (var echoHttpServer = new EchoHttpServer(testUrl))
                 {
                     // Wait for the server to connect, the message to be received, and the task to be complete.
                     AssertTimeoutWithRetries(AssertIsTrue, webSocket.IsConnected, "WebSocket connected after server re-created");
@@ -342,12 +362,14 @@ namespace Aws.GameLift.Tests.Server
         {
             var messageReceivedEvent = SetupServerOnSuccessResponseReceived();
 
+            string testUrl;
             // Create a GameLiftWebSocket with a lower maxConnectRetries and maxWaitForConnectedRetries to reduce test time
             using (var webSocket = new GameLiftWebSocket(mockServerState.Object, 0, 1))
             {
-                using (new EchoHttpServer())
+                using (var echoHttpServer = new EchoHttpServer())
                 {
-                    webSocket.Connect(WEBSOCKET_URL);
+                    testUrl = echoHttpServer.WebSocketUrl;
+                    webSocket.Connect(testUrl);
                     Assert.IsTrue(webSocket.IsConnected());
                 }
 
@@ -439,39 +461,76 @@ namespace Aws.GameLift.Tests.Server
         {
             private readonly HttpServer server;
             private string idempotencyToken;
+            public int Port { get; private set; }
+            public string WebSocketUrl => $"ws://localhost:{Port}/Echo";
+
             public EchoHttpServer()
             {
-                server = new HttpServer(PORT);
+                // Find an available port
+                Port = GetAvailablePort();
+                server = new HttpServer(Port);
                 server.Log.Level = LogLevel.Trace;
                 server.AddWebSocketService<Echo>("/Echo", () => new Echo(this));
                 server.Start();
                 Assert.IsTrue(server.IsListening, "HttpServer is listening");
             }
 
+            // Constructor that uses a specific URL (for reconnection tests)
+            public EchoHttpServer(string existingUrl)
+            {
+                // Extract port from existing URL
+                var uri = new Uri(existingUrl);
+                Port = uri.Port;
+                server = new HttpServer(Port);
+                server.Log.Level = LogLevel.Trace;
+                server.AddWebSocketService<Echo>("/Echo", () => new Echo(this));
+                server.Start();
+                Assert.IsTrue(server.IsListening, "HttpServer is listening");
+            }
+
+            private static int GetAvailablePort()
+            {
+                using (var socket = new Socket(AddressFamily.InterNetwork,
+                    SocketType.Stream, ProtocolType.Tcp))
+                {
+                    socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+                    return ((IPEndPoint)socket.LocalEndPoint).Port;
+                }
+            }
+
             public string getIdempotencyToken()
             {
                 return idempotencyToken;
             }
-            
+
             public void Dispose()
             {
-                server.Stop();
+                try
+                {
+                    server?.Stop();
+                    // Give the socket time to fully close
+                    Thread.Sleep(100);
+                }
+                catch (Exception)
+                {
+                    // Ignore disposal errors
+                }
             }
 
             private class Echo : WebSocketBehavior
             {
                 private readonly EchoHttpServer _parent;
-                
+
                 public Echo(EchoHttpServer parent)
                 {
                     _parent = parent;
                 }
-                
+
                 protected override void OnOpen()
                 {
                     _parent.idempotencyToken = Context.QueryString["IdempotencyToken"];
                 }
-                
+
                 protected override void OnMessage(MessageEventArgs e)
                 {
                     Send(e.Data);

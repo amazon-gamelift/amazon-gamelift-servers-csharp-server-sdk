@@ -12,10 +12,12 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Aws.GameLift.Server.Common;
 using Aws.GameLift.Server.Model;
 using Aws.GameLift.Server.Security;
 using log4net;
@@ -29,29 +31,12 @@ namespace Aws.GameLift.Server
     {
         // When within 15 minutes of expiration we retrieve new instance role credentials
         public static readonly TimeSpan InstanceRoleCredentialTtlMin = TimeSpan.FromMinutes(15);
-
-        private const string EnvironmentVariableWebsocketUrl = "GAMELIFT_SDK_WEBSOCKET_URL";
-        private const string EnvironmentVariableComputeType = "GAMELIFT_COMPUTE_TYPE";
-        private const string EnvironmentVariableProcessId = "GAMELIFT_SDK_PROCESS_ID";
-        private const string EnvironmentVariableHostId = "GAMELIFT_SDK_HOST_ID";
-        private const string EnvironmentVariableFleetId = "GAMELIFT_SDK_FLEET_ID";
-        private const string EnvironmentVariableAuthToken = "GAMELIFT_SDK_AUTH_TOKEN";
-        private const string EnvironmentVariableAwsRegion = "GAMELIFT_REGION";
-        private const string EnvironmentVariableAccessKey = "GAMELIFT_ACCESS_KEY";
-        private const string EnvironmentVariableSecretKey = "GAMELIFT_SECRET_KEY";
-        private const string EnvironmentVariableSessionToken = "GAMELIFT_SESSION_TOKEN";
-        private const string EnvironmentVariableSdkToolName = "GAMELIFT_SDK_TOOL_NAME";
-        private const string EnvironmentVariableSdkToolVersion = "GAMELIFT_SDK_TOOL_VERSION";
-        private const string AgentlessContainerProcessId = "ManagedResource";
-        private const string ComputeTypeContainer = "CONTAINER";
-
         private const double HealthcheckIntervalSeconds = 60;
         private const double ActivateServerProcessRequestTimeoutSeconds = 6;
         private const double HealthcheckMaxJitterSeconds = 10;
         private const double HealthcheckTimeoutSeconds = HealthcheckIntervalSeconds - HealthcheckMaxJitterSeconds;
         private const int HttpStatusCodeSuccessStart = 200;
         private const int HttpStatusCodeSuccessEnd = 299;
-        private const string SdkLanguage = "CSharp";
 
         private static readonly DateTime Epoch = new DateTime(1970, 1, 1, 0, 0, 0);
 
@@ -73,6 +58,10 @@ namespace Aws.GameLift.Server
         private string processId;
         // Assume we're on managed EC2, if GetFleetRoleCredentials fails we know to set this to false
         private bool onManagedEc2 = true;
+        private Metrics metrics;
+
+        // Visible for testing - stores the MetricsParameters used in InitializeMetrics
+        internal MetricsParameters _metricsParameters { get; private set; }
 
         public static ServerState Instance { get; } = new ServerState();
 
@@ -101,12 +90,14 @@ namespace Aws.GameLift.Server
                 return result;
             }
 
-            string sdkToolName = Environment.GetEnvironmentVariable(EnvironmentVariableSdkToolName);
-            string sdkToolVersion = Environment.GetEnvironmentVariable(EnvironmentVariableSdkToolVersion);
+            DetectGameLiftTools();
+
+            string sdkToolName = Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSdkToolName);
+            string sdkToolVersion = Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSdkToolVersion);
 
             result = webSocketRequestHandler.SendRequest(new ActivateServerProcessRequest(
                 GameLiftServerAPI.GetSdkVersion().Result,
-                SdkLanguage,
+                GameLiftConstants.SdkLanguage,
                 sdkToolName,
                 sdkToolVersion,
                 processParameters.Port,
@@ -168,6 +159,7 @@ namespace Aws.GameLift.Server
             {
                 return new GenericOutcome(new GameLiftError(GameLiftErrorType.GAMESESSION_ID_NOT_SET));
             }
+
             GenericOutcome outcome = Validation.ValidatePlayerSessionCreationPolicy(playerSessionPolicy);
             if (!outcome.Success)
             {
@@ -183,6 +175,7 @@ namespace Aws.GameLift.Server
             {
                 return new GenericOutcome(new GameLiftError(GameLiftErrorType.GAMESESSION_ID_NOT_SET));
             }
+
             GenericOutcome outcome = Validation.ValidatePlayerSessionId(playerSessionId);
             if (!outcome.Success)
             {
@@ -198,6 +191,7 @@ namespace Aws.GameLift.Server
             {
                 return new GenericOutcome(new GameLiftError(GameLiftErrorType.GAMESESSION_ID_NOT_SET));
             }
+
             GenericOutcome outcome = Validation.ValidatePlayerSessionId(playerSessionId);
             if (!outcome.Success)
             {
@@ -350,20 +344,20 @@ namespace Aws.GameLift.Server
 
         public GenericOutcome InitializeNetworking(ServerParameters serverParameters)
         {
-            serverParameters.WebSocketUrl = System.Environment.GetEnvironmentVariable(EnvironmentVariableWebsocketUrl) ?? serverParameters.WebSocketUrl;
-            serverParameters.ProcessId = System.Environment.GetEnvironmentVariable(EnvironmentVariableProcessId) ?? serverParameters.ProcessId;
-            serverParameters.HostId = System.Environment.GetEnvironmentVariable(EnvironmentVariableHostId) ?? serverParameters.HostId;
-            serverParameters.FleetId = System.Environment.GetEnvironmentVariable(EnvironmentVariableFleetId) ?? serverParameters.FleetId;
-            serverParameters.AuthToken = System.Environment.GetEnvironmentVariable(EnvironmentVariableAuthToken) ?? serverParameters.AuthToken;
-            serverParameters.AwsRegion = System.Environment.GetEnvironmentVariable(EnvironmentVariableAwsRegion) ?? serverParameters.AwsRegion;
-            serverParameters.AccessKey = System.Environment.GetEnvironmentVariable(EnvironmentVariableAccessKey) ?? serverParameters.AccessKey;
-            serverParameters.SecretKey = System.Environment.GetEnvironmentVariable(EnvironmentVariableSecretKey) ?? serverParameters.SecretKey;
-            serverParameters.SessionToken = System.Environment.GetEnvironmentVariable(EnvironmentVariableSessionToken) ?? serverParameters.SessionToken;
+            serverParameters.WebSocketUrl = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableWebsocketUrl) ?? serverParameters.WebSocketUrl;
+            serverParameters.ProcessId = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableProcessId) ?? serverParameters.ProcessId;
+            serverParameters.HostId = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableHostId) ?? serverParameters.HostId;
+            serverParameters.FleetId = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableFleetId) ?? serverParameters.FleetId;
+            serverParameters.AuthToken = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableAuthToken) ?? serverParameters.AuthToken;
+            serverParameters.AwsRegion = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableAwsRegion) ?? serverParameters.AwsRegion;
+            serverParameters.AccessKey = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableAccessKey) ?? serverParameters.AccessKey;
+            serverParameters.SecretKey = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSecretKey) ?? serverParameters.SecretKey;
+            serverParameters.SessionToken = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSessionToken) ?? serverParameters.SessionToken;
 
-            var computeType = System.Environment.GetEnvironmentVariable(EnvironmentVariableComputeType);
-            bool isContainerComputeType = ComputeTypeContainer.Equals(computeType);
+            var computeType = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableComputeType);
+            bool isContainerComputeType = GameLiftConstants.ComputeTypeContainer.Equals(computeType);
 
-            if (AgentlessContainerProcessId.Equals(System.Environment.GetEnvironmentVariable(EnvironmentVariableProcessId)))
+            if (GameLiftConstants.AgentlessContainerProcessId.Equals(System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableProcessId)))
             {
                 serverParameters.ProcessId = Guid.NewGuid().ToString();
             }
@@ -550,6 +544,7 @@ namespace Aws.GameLift.Server
         {
             // Inject data that already exists on the server
             gameSession.FleetId = fleetId;
+            metrics?.OnGameSessionStart(gameSession);
 
             Log.DebugFormat("ServerState got the startGameSession signal. GameSession : {0}", gameSession);
 
@@ -589,6 +584,9 @@ namespace Aws.GameLift.Server
             this.terminationTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMilliseconds(terminationTime);
 
             Log.DebugFormat("ServerState got the terminateProcess signal. termination time : {0}", this.terminationTime);
+
+            metrics?.OnProcessTermination();
+
             if (processParameters.OnProcessTerminate != null)
             {
                 Task.Run(() =>
@@ -612,10 +610,12 @@ namespace Aws.GameLift.Server
                     {
                         Log.ErrorFormat("ProcessEnding() failed. {0}", processEndingOutcome.Error);
                     }
+
                     if (!destroyOutcome.Success)
                     {
                         Log.ErrorFormat("Destroy() failed. {0}", destroyOutcome.Error);
                     }
+
                     environmentWrapper.Exit(-1);
                 }
             }
@@ -685,6 +685,109 @@ namespace Aws.GameLift.Server
             webSocketRequestHandler.HandleResponse(requestId, result);
         }
 
+        public MetricsOutcome InitializeMetrics()
+        {
+            return InitializeMetrics(null);
+        }
+
+        public MetricsOutcome InitializeMetrics(MetricsParameters metricsParameters)
+        {
+            try
+            {
+                MetricsParameters parameters;
+
+                if (metricsParameters != null)
+                {
+                    // User provided parameters - use them as-is, no environment variables overrides
+                    parameters = metricsParameters;
+                }
+                else
+                {
+                    // No user parameters - start with defaults and apply environment variables overrides
+                    parameters = CreateDefaultParameters();
+                    parameters = ApplyEnvironmentVariableOverrides(parameters);
+                }
+
+                GenericOutcome validationOutcome = Validation.ValidateMetricsParameters(parameters);
+                if (!validationOutcome.Success)
+                {
+                    return new MetricsOutcome(validationOutcome.Error);
+                }
+
+                // Store parameters for testing verification
+                _metricsParameters = parameters;
+
+                var builder = Metrics.Create();
+                builder.SetStatsdHost(parameters.StatsdHost)
+                       .SetStatsdPort(parameters.StatsdPort)
+                       .SetCrashReporterHost(parameters.CrashReporterHost)
+                       .SetCrashReporterPort(parameters.CrashReporterPort)
+                       .SetFlushInterval(parameters.FlushIntervalMs)
+                       .SetMaxPacketSize(parameters.MaxPacketSize);
+                metrics = builder.Build();
+
+                // If a game session is already active, tag the metrics manager with the session ID
+                if (!string.IsNullOrEmpty(gameSessionId))
+                {
+                    metrics.OnGameSessionStart(gameSessionId);
+                }
+
+                return new MetricsOutcome(metrics);
+            }
+            catch (System.Exception ex)
+            {
+                return new MetricsOutcome(new GameLiftError(GameLiftErrorType.METRICS_CONFIGURATION_FAILED, ex.Message));
+            }
+        }
+
+        private static MetricsParameters CreateDefaultParameters()
+        {
+            return new MetricsParameters(
+                GameLiftConstants.DefaultStatsdHost,
+                GameLiftConstants.DefaultStatsdPort,
+                GameLiftConstants.DefaultCrashReporterHost,
+                GameLiftConstants.DefaultCrashReporterPort,
+                GameLiftConstants.DefaultFlushIntervalMs,
+                GameLiftConstants.DefaultMaxPacketSize);
+        }
+
+        private static MetricsParameters ApplyEnvironmentVariableOverrides(MetricsParameters parameters)
+        {
+            string envStatsdHost = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableStatsdHost);
+            if (!string.IsNullOrEmpty(envStatsdHost))
+            {
+                parameters.StatsdHost = envStatsdHost;
+            }
+
+            if (int.TryParse(System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableStatsdPort), out int envStatsdPort))
+            {
+                parameters.StatsdPort = envStatsdPort;
+            }
+
+            string envCrashReporterHost = System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableCrashReporterHost);
+            if (!string.IsNullOrEmpty(envCrashReporterHost))
+            {
+                parameters.CrashReporterHost = envCrashReporterHost;
+            }
+
+            if (int.TryParse(System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableCrashReporterPort), out int envCrashReporterPort))
+            {
+                parameters.CrashReporterPort = envCrashReporterPort;
+            }
+
+            if (int.TryParse(System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableFlushIntervalMs), out int envFlushInterval))
+            {
+                parameters.FlushIntervalMs = envFlushInterval;
+            }
+
+            if (int.TryParse(System.Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableMaxPacketSize), out int envMaxPacketSize))
+            {
+                parameters.MaxPacketSize = envMaxPacketSize;
+            }
+
+            return parameters;
+        }
+
         public void Shutdown()
         {
             processReady = false;
@@ -694,6 +797,14 @@ namespace Aws.GameLift.Server
             Thread.Sleep(TimeSpan.FromSeconds(1).Milliseconds);
 
             gameLiftWebSocket.Disconnect();
+
+            metrics?.Dispose();
+        }
+
+        private static void DetectGameLiftTools()
+        {
+            var metricsDetector = new MetricsDetector();
+            metricsDetector.SetGameLiftTool();
         }
     }
 }

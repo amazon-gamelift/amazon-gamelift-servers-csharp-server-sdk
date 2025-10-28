@@ -197,7 +197,7 @@ namespace Aws.GameLift.Server
 
         public static GenericOutcome ValidateStartMatchBackfillRequest(StartMatchBackfillRequest input)
         {
-            GenericOutcome outcome= ValidationCommon.ValidateString(
+            GenericOutcome outcome = ValidationCommon.ValidateString(
                 fieldName: "GameSessionArn",
                 input: input.GameSessionArn,
                 required: true,
@@ -211,7 +211,7 @@ namespace Aws.GameLift.Server
 
             outcome = ValidationCommon.ValidateString(
                 fieldName: "MatchmakingConfigurationArn",
-                input: input.MatchmakingConfigurationArn, 
+                input: input.MatchmakingConfigurationArn,
                 required: true,
                 regex: GameLiftArnRegex,
                 maxLength: MaxStringLengthArn,
@@ -306,6 +306,49 @@ namespace Aws.GameLift.Server
             }
 
             return outcome;
+        }
+
+        public static GenericOutcome ValidateMetricsParameters(MetricsParameters input)
+        {
+            GenericOutcome outcome = ValidationCommon.ValidateString(
+                fieldName: "StatsdHost",
+                input: input.StatsdHost,
+                required: true);
+            if (!outcome.Success)
+            {
+                return outcome;
+            }
+
+            if (input.StatsdPort < PortMin || input.StatsdPort > PortMax)
+            {
+                return new GenericOutcome(new GameLiftError(GameLiftErrorType.VALIDATION_EXCEPTION, $"StatsdPort must be between {PortMin} and {PortMax}"));
+            }
+
+            outcome = ValidationCommon.ValidateString(
+                fieldName: "CrashReporterHost",
+                input: input.CrashReporterHost,
+                required: true);
+            if (!outcome.Success)
+            {
+                return outcome;
+            }
+
+            if (input.CrashReporterPort < PortMin || input.CrashReporterPort > PortMax)
+            {
+                return new GenericOutcome(new GameLiftError(GameLiftErrorType.VALIDATION_EXCEPTION, $"StatsdPort must be between {PortMin} and {PortMax}"));
+            }
+
+            if (input.FlushIntervalMs < 0)
+            {
+                return new GenericOutcome(new GameLiftError(GameLiftErrorType.VALIDATION_EXCEPTION, "FlushIntervalMs must be non-negative"));
+            }
+
+            if (input.MaxPacketSize < 0)
+            {
+                return new GenericOutcome(new GameLiftError(GameLiftErrorType.VALIDATION_EXCEPTION, "MaxPacketSize must be non-negative"));
+            }
+
+            return new GenericOutcome();
         }
     }
 }

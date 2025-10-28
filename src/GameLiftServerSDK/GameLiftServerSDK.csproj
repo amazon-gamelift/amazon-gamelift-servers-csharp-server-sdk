@@ -5,6 +5,16 @@
         <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
         <Configurations>Debug;Release</Configurations>
         <Platforms>x64;arm64</Platforms>
+        <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
+        <RunCodeAnalysis>false</RunCodeAnalysis>
+        <EnableNETAnalyzers>false</EnableNETAnalyzers>
+        <AnalysisMode>None</AnalysisMode>
+        <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+        <WarningsAsErrors />
+        <WarningLevel>0</WarningLevel>
+        <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+        <SkipAnalyzers>true</SkipAnalyzers>
+        <CodeAnalysisRuleSet>..\..\GameLiftServerSDK.ruleset</CodeAnalysisRuleSet>
     </PropertyGroup>
     <ItemGroup>
         <PackageReference Include="log4net" Version="2.0.15" />
