@@ -24,12 +24,34 @@ namespace Aws.GameLift.Server.Common
 
         public void SetGameLiftTool()
         {
-            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSdkToolName))
-                && IsToolRunning())
+            if (!IsToolRunning())
             {
-                Environment.SetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSdkToolName, GetToolName());
-                Environment.SetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSdkToolVersion, GetToolVersion());
+                return;
             }
+            string existingToolName = Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSdkToolName);
+            string existingToolVersion = Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSdkToolVersion);
+            string toolName = GetToolName();
+            string toolVersion = GetToolVersion();
+
+            if (!string.IsNullOrEmpty(existingToolName))
+            {
+                if (existingToolVersion == null)
+                {
+                    existingToolVersion = string.Empty;
+                }
+                if (!existingToolName.Contains(toolName))
+                {
+                    toolName = existingToolName + "," + toolName;
+                    toolVersion = existingToolVersion + "," + toolVersion;
+                }
+                else
+                {
+                    toolName = existingToolName;
+                    toolVersion = existingToolVersion;
+                }
+            }
+            Environment.SetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSdkToolName, toolName);
+            Environment.SetEnvironmentVariable(GameLiftConstants.EnvironmentVariableSdkToolVersion, toolVersion);
         }
     }
 }
