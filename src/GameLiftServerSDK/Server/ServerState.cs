@@ -21,6 +21,7 @@ using Aws.GameLift.Server.Common;
 using Aws.GameLift.Server.Model;
 using Aws.GameLift.Server.Security;
 using log4net;
+using Newtonsoft.Json.Linq;
 using WebSocketSharp;
 
 namespace Aws.GameLift.Server
@@ -37,6 +38,7 @@ namespace Aws.GameLift.Server
         private const double HealthcheckTimeoutSeconds = HealthcheckIntervalSeconds - HealthcheckMaxJitterSeconds;
         private const int HttpStatusCodeSuccessStart = 200;
         private const int HttpStatusCodeSuccessEnd = 299;
+        private const double DiscoveryServerHttpTimeoutSeconds = 5;
 
         private static readonly DateTime Epoch = new DateTime(1970, 1, 1, 0, 0, 0);
 
@@ -512,6 +514,227 @@ namespace Aws.GameLift.Server
 
             instanceRoleResultCache[request.RoleArn] = result;
             return outcome;
+        }
+
+        public ListContainersNetworkInfoOutcome ListContainersNetworkInfo()
+        {
+            Log.Debug("Calling ListContainersNetworkInfo");
+
+            var computeType = Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableComputeType);
+            if (!GameLiftConstants.ComputeTypeContainer.Equals(computeType))
+            {
+                Log.Error("ListContainersNetworkInfo is only supported on container fleets");
+                return new ListContainersNetworkInfoOutcome(new GameLiftError(
+                    GameLiftErrorType.UNSUPPORTED_COMPUTE_TYPE_EXCEPTION,
+                    "ListContainersNetworkInfo is only supported on container fleets."));
+            }
+
+            var response = FetchDiscoveryServerResponse(out var fetchError);
+            if (response == null)
+            {
+                Log.ErrorFormat("ListContainersNetworkInfo failed: {0}", fetchError);
+                return new ListContainersNetworkInfoOutcome(new GameLiftError(
+                    GameLiftErrorType.INTERNAL_SERVICE_EXCEPTION, fetchError));
+            }
+
+            if (response.StatusCode < HttpStatusCodeSuccessStart || response.StatusCode > HttpStatusCodeSuccessEnd)
+            {
+                Log.ErrorFormat("Discovery server returned HTTP {0}: {1}", response.StatusCode, response.Body);
+                return new ListContainersNetworkInfoOutcome(new GameLiftError(
+                    GameLiftErrorType.INTERNAL_SERVICE_EXCEPTION,
+                    string.Format("Discovery server returned HTTP {0}", response.StatusCode)));
+            }
+
+            return ParseDiscoveryServerResponse(response.Body);
+        }
+
+        // Resolves the discovery server endpoint and fetches the /v1/ response.
+        // Strategy:
+        //   1. Use GAMELIFT_CONTAINER_DISCOVERY_SERVER_ENDPOINT env var set by GameLift on container fleets.
+        //   2. Fallback (env var absent): query ECS container metadata to get this container's IP, derive
+        //      the bridge gateway (replace last octet with .1), and use that as the discovery server address.
+        //   3. If the env var endpoint fails to connect, retry with the metadata-derived endpoint in case
+  		//      the env var is stale (e.g., Docker bridge IP changed).
+        private static DiscoveryServerHttpResponse FetchDiscoveryServerResponse(out string errorMessage)
+        {
+            var endpointEnv = Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableContainerDiscoveryServerEndpoint);
+            string endpoint = endpointEnv ?? string.Empty;
+
+            if (string.IsNullOrEmpty(endpoint))
+            {
+                endpoint = ResolveDiscoveryEndpointFromMetadata();
+                if (string.IsNullOrEmpty(endpoint))
+                {
+                    errorMessage = "Could not resolve discovery server endpoint.";
+                    return null;
+                }
+
+                Log.InfoFormat("Resolved discovery server endpoint from ECS metadata: {0}", endpoint);
+            }
+            else
+            {
+                Log.InfoFormat("Using discovery server endpoint from env var: {0}", endpoint);
+            }
+
+            string url = endpoint + GameLiftConstants.DiscoveryServerPath;
+            try
+            {
+                errorMessage = null;
+                return SendGetRequest(url);
+            }
+            catch (Exception e)
+            {
+                // Only retry with a fresh metadata lookup if we started from the env var - the env var
+                // might be stale (e.g. Docker bridge IP changed). If we already came from metadata,
+                // re-resolving would just produce the same URL.
+                if (!string.IsNullOrEmpty(endpointEnv))
+                {
+                    Log.WarnFormat("Failed to connect at {0}: {1}. Attempting fallback.", url, e.Message);
+                    string fallback = ResolveDiscoveryEndpointFromMetadata();
+                    if (!string.IsNullOrEmpty(fallback) && !string.Equals(fallback, endpoint, StringComparison.Ordinal))
+                    {
+                        Log.InfoFormat("Fallback: trying {0}", fallback);
+                        string fallbackUrl = fallback + GameLiftConstants.DiscoveryServerPath;
+                        try
+                        {
+                            errorMessage = null;
+                            return SendGetRequest(fallbackUrl);
+                        }
+                        catch (Exception fe)
+                        {
+                            errorMessage = string.Format("Failed to connect to discovery server: {0}", fe.Message);
+                            return null;
+                        }
+                    }
+                }
+
+                errorMessage = string.Format("Failed to connect to discovery server: {0}", e.Message);
+                return null;
+            }
+        }
+
+        private static string ResolveDiscoveryEndpointFromMetadata()
+        {
+            try
+            {
+                var metadataUri = Environment.GetEnvironmentVariable(GameLiftConstants.EnvironmentVariableEcsContainerMetadataUri);
+                if (string.IsNullOrEmpty(metadataUri))
+                {
+                    return null;
+                }
+
+                // ECS container metadata returns: {"Networks":[{"NetworkMode":"bridge","IPv4Addresses":["172.17.0.5"]}]}
+                // The bridge gateway is always .1 on the container's subnet (e.g., 172.17.0.5 → 172.17.0.1)
+                using (var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(DiscoveryServerHttpTimeoutSeconds) })
+                {
+                    var body = httpClient.GetStringAsync(metadataUri).GetAwaiter().GetResult();
+                    var metadata = JObject.Parse(body);
+                    var networks = metadata["Networks"] as JArray;
+                    if (networks == null || networks.Count == 0)
+                    {
+                        return null;
+                    }
+
+                    var ipAddresses = networks[0]?["IPv4Addresses"] as JArray;
+                    if (ipAddresses == null || ipAddresses.Count == 0)
+                    {
+                        return null;
+                    }
+
+                    var ip = ipAddresses[0]?.ToString();
+                    if (string.IsNullOrEmpty(ip))
+                    {
+                        return null;
+                    }
+
+                    // Replace the container's last octet with ".1" to get the bridge gateway IP.
+                    var lastDot = ip.LastIndexOf('.');
+                    if (lastDot < 0)
+                    {
+                        return null;
+                    }
+
+                    var gateway = ip.Substring(0, lastDot) + ".1";
+                    return string.Format("http://{0}:{1}", gateway, GameLiftConstants.DiscoveryServerDefaultPort);
+                }
+            }
+            catch (Exception e)
+            {
+                Log.DebugFormat("Failed to resolve discovery endpoint from ECS metadata: {0}", e.Message);
+                return null;
+            }
+        }
+
+        private static DiscoveryServerHttpResponse SendGetRequest(string url)
+        {
+            using (var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(DiscoveryServerHttpTimeoutSeconds) })
+            {
+                using (var response = httpClient.GetAsync(url).GetAwaiter().GetResult())
+                {
+                    return new DiscoveryServerHttpResponse
+                    {
+                        StatusCode = (int)response.StatusCode,
+                        Body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult(),
+                    };
+                }
+            }
+        }
+
+        private static ListContainersNetworkInfoOutcome ParseDiscoveryServerResponse(string body)
+        {
+            JArray array;
+            try
+            {
+                array = JArray.Parse(body);
+            }
+            catch (Exception)
+            {
+                Log.ErrorFormat("Failed to parse discovery server response: {0}", body);
+                return new ListContainersNetworkInfoOutcome(new GameLiftError(
+                    GameLiftErrorType.INTERNAL_SERVICE_EXCEPTION,
+                    "Invalid response from discovery server"));
+            }
+
+            if (array.Count == 0)
+            {
+                Log.Warn("Discovery server returned empty container list");
+            }
+
+            Log.InfoFormat("ListContainersNetworkInfo response: {0}", body);
+
+            var result = new ListContainersNetworkInfoResult();
+            foreach (var entry in array)
+            {
+                if (entry.Type != JTokenType.Object)
+                {
+                    continue;
+                }
+
+                var info = new ContainerNetworkInfo
+                {
+                    ContainerName = entry["containerName"]?.ToString() ?? string.Empty,
+                    ContainerId = entry["containerId"]?.ToString() ?? string.Empty,
+                    IpAddress = entry["ipAddress"]?.ToString() ?? string.Empty,
+                    ContainerGroupType = ParseContainerGroupType(entry["containerGroupType"]?.ToString()),
+                };
+                result.AddContainerNetworkInfo(info);
+            }
+
+            return new ListContainersNetworkInfoOutcome(result);
+        }
+
+        private static ContainerGroupType ParseContainerGroupType(string value)
+        {
+            return string.Equals(value, "PER_INSTANCE", StringComparison.Ordinal)
+                ? ContainerGroupType.PER_INSTANCE
+                : ContainerGroupType.GAME_SERVER;
+        }
+
+        private sealed class DiscoveryServerHttpResponse
+        {
+            public int StatusCode { get; set; }
+
+            public string Body { get; set; }
         }
 
         public void OnErrorResponse(string requestId, int statusCode, string errorMessage, string action)

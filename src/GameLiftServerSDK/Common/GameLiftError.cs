@@ -30,6 +30,7 @@ namespace Aws.GameLift
         VALIDATION_EXCEPTION,                       // Invalid input parameter.
         METRICS_CONFIGURATION_FAILED,               // Failed to configure or define metrics.
         METRICS_SUBMISSION_FAILED,                  // Failed to submit or send metrics data.
+        UNSUPPORTED_COMPUTE_TYPE_EXCEPTION,         // API called on an unsupported compute type.
     }
 
     public class GameLiftError
@@ -111,6 +112,8 @@ namespace Aws.GameLift
                     return "Metrics configuration failed";
                 case GameLiftErrorType.METRICS_SUBMISSION_FAILED:
                     return "Metrics submission failed";
+                case GameLiftErrorType.UNSUPPORTED_COMPUTE_TYPE_EXCEPTION:
+                    return "Unsupported compute type.";
                 default:
                     return "Unknown Error";
             }
@@ -154,6 +157,8 @@ namespace Aws.GameLift
                     return "Failed to configure or define metrics. Check metric parameters and configuration.";
                 case GameLiftErrorType.METRICS_SUBMISSION_FAILED:
                     return "Failed to submit or send metrics data. Check network connectivity and StatsD configuration.";
+                case GameLiftErrorType.UNSUPPORTED_COMPUTE_TYPE_EXCEPTION:
+                    return "This API is not supported on the current compute type.";
                 default:
                     return "An unexpected error has occurred.";
             }

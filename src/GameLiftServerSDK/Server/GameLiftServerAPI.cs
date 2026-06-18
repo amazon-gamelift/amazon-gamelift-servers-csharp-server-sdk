@@ -19,7 +19,7 @@ namespace Aws.GameLift.Server
     public static class GameLiftServerAPI
 #pragma warning restore S101
     {
-        private const string SdkVersion = "5.4.0";
+        private const string SdkVersion = "5.5.0";
 
         /// <summary>
         /// Returns the current version number of the SDK built into the server process.
@@ -476,6 +476,32 @@ namespace Aws.GameLift.Server
         public static GetComputeCertificateOutcome GetComputeCertificate()
         {
             return ServerState.Instance.GetComputeCertificate();
+        }
+
+        /// <summary>
+        /// Queries the container discovery server and returns network information for every
+        /// container running on the instance. Only supported on container fleets.
+        /// </summary>
+        /// <returns>On success, a <see cref="ListContainersNetworkInfoOutcome"/> whose
+        /// <c>Result.ContainersNetworkInfo</c> contains one entry per discovered container.
+        /// On failure, the outcome's <c>Error</c> indicates the failure reason
+        /// (e.g. <c>UNSUPPORTED_COMPUTE_TYPE_EXCEPTION</c> when not running on a container fleet,
+        /// or <c>INTERNAL_SERVICE_EXCEPTION</c> when the discovery server is unreachable).</returns>
+        /// <example>
+        /// <code>
+        /// var outcome = GameLiftServerAPI.ListContainersNetworkInfo();
+        /// if (outcome.Success)
+        /// {
+        ///     foreach (var info in outcome.Result.ContainersNetworkInfo)
+        ///     {
+        ///         Console.WriteLine($"{info.ContainerName} ({info.ContainerGroupType}) -> {info.IpAddress}");
+        ///     }
+        /// }
+        /// </code>
+        /// </example>
+        public static ListContainersNetworkInfoOutcome ListContainersNetworkInfo()
+        {
+            return ServerState.Instance.ListContainersNetworkInfo();
         }
 
         /// <summary>
