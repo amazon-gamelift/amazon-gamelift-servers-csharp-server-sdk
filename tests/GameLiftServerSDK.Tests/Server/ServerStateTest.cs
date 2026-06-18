@@ -32,7 +32,7 @@ namespace Aws.GameLift.Tests.Server
     [TestFixture]
     public class ServerStateTest
     {
-        private const string SdkVersion = "5.4.0";
+        private const string SdkVersion = "5.5.0";
         private const string SdkToolName = "testSdkToolName";
         private const string SdkToolVersion = "1.0.0";
         private const string EnvironmentVariableWebsocketUrl = "GAMELIFT_SDK_WEBSOCKET_URL";
@@ -1993,6 +1993,92 @@ namespace Aws.GameLift.Tests.Server
             }
 
             Assert.IsTrue(disposalLogFound, "Expected log message was not found");
+        }
+
+        [Test]
+        public void GIVEN_nonContainerComputeType_WHEN_listContainersNetworkInfo_THEN_returnsUnsupportedError()
+        {
+            // GIVEN
+            UsingEnvironmentVariables(
+                new Dictionary<string, string>
+                {
+                    { "GAMELIFT_COMPUTE_TYPE", "EC2" },
+                },
+                () =>
+                {
+                    // WHEN
+                    var outcome = GameLiftServerAPI.ListContainersNetworkInfo();
+
+                    // THEN
+                    Assert.IsFalse(outcome.Success);
+                    Assert.AreEqual(GameLiftErrorType.UNSUPPORTED_COMPUTE_TYPE_EXCEPTION, outcome.Error.ErrorType);
+                });
+        }
+
+        [Test]
+        public void GIVEN_noComputeType_WHEN_listContainersNetworkInfo_THEN_returnsUnsupportedError()
+        {
+            // GIVEN
+            UsingEnvironmentVariables(
+                new Dictionary<string, string>
+                {
+                    { "GAMELIFT_COMPUTE_TYPE", null },
+                },
+                () =>
+                {
+                    // WHEN
+                    var outcome = GameLiftServerAPI.ListContainersNetworkInfo();
+
+                    // THEN
+                    Assert.IsFalse(outcome.Success);
+                    Assert.AreEqual(GameLiftErrorType.UNSUPPORTED_COMPUTE_TYPE_EXCEPTION, outcome.Error.ErrorType);
+                });
+        }
+
+        [Test]
+        public void GIVEN_containerTypeNoEndpointNoMetadata_WHEN_listContainersNetworkInfo_THEN_returnsServiceError()
+        {
+            // GIVEN
+            UsingEnvironmentVariables(
+                new Dictionary<string, string>
+                {
+                    { "GAMELIFT_COMPUTE_TYPE", "CONTAINER" },
+                    { "GAMELIFT_CONTAINER_DISCOVERY_SERVER_ENDPOINT", null },
+                    { "ECS_CONTAINER_METADATA_URI_V4", null },
+                },
+                () =>
+                {
+                    // WHEN
+                    var outcome = GameLiftServerAPI.ListContainersNetworkInfo();
+
+                    // THEN
+                    Assert.IsFalse(outcome.Success);
+                    Assert.AreEqual(GameLiftErrorType.INTERNAL_SERVICE_EXCEPTION, outcome.Error.ErrorType);
+                });
+        }
+
+        [Test]
+        public void GIVEN_containerTypeWithUnreachableEndpoint_WHEN_listContainersNetworkInfo_THEN_returnsServiceError()
+        {
+            // GIVEN - RFC 5737 TEST-NET-1 address: guaranteed unreachable. Also clear
+            // ECS_CONTAINER_METADATA_URI_V4 so the fallback path doesn't make an unpredictable
+            // HTTP call to a real metadata endpoint.
+            UsingEnvironmentVariables(
+                new Dictionary<string, string>
+                {
+                    { "GAMELIFT_COMPUTE_TYPE", "CONTAINER" },
+                    { "GAMELIFT_CONTAINER_DISCOVERY_SERVER_ENDPOINT", "http://192.0.2.1:4092" },
+                    { "ECS_CONTAINER_METADATA_URI_V4", null },
+                },
+                () =>
+                {
+                    // WHEN
+                    var outcome = GameLiftServerAPI.ListContainersNetworkInfo();
+
+                    // THEN
+                    Assert.IsFalse(outcome.Success);
+                    Assert.AreEqual(GameLiftErrorType.INTERNAL_SERVICE_EXCEPTION, outcome.Error.ErrorType);
+                });
         }
     }
 }
