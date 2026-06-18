@@ -30,6 +30,12 @@ namespace Aws.GameLift
         public static readonly string ComputeTypeContainer = "CONTAINER";
         public static readonly string SdkLanguage = "CSharp";
 
+        // Cross-CGD discovery server
+        public static readonly string EnvironmentVariableContainerDiscoveryServerEndpoint = "GAMELIFT_CONTAINER_DISCOVERY_SERVER_ENDPOINT";
+        public static readonly string EnvironmentVariableEcsContainerMetadataUri = "ECS_CONTAINER_METADATA_URI_V4";
+        public static readonly int DiscoveryServerDefaultPort = 4092;
+        public static readonly string DiscoveryServerPath = "/v1/";
+
         // Metrics environment variables
         public static readonly string EnvironmentVariableStatsdHost = "GAMELIFT_STATSD_HOST";
         public static readonly string EnvironmentVariableStatsdPort = "GAMELIFT_STATSD_PORT";

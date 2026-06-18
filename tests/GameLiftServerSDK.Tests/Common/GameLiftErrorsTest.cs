@@ -106,5 +106,17 @@ namespace Aws.GameLift
         {
             return Enumerable.Range(500, 100);
         }
+
+        [Test]
+        public void GIVEN_unsupportedComputeTypeErrorType_WHEN_constructor_THEN_hasDefaultNameAndMessage()
+        {
+            // Given / When
+            GameLiftError error = new GameLiftError(GameLiftErrorType.UNSUPPORTED_COMPUTE_TYPE_EXCEPTION);
+
+            // Then
+            Assert.AreEqual(GameLiftErrorType.UNSUPPORTED_COMPUTE_TYPE_EXCEPTION, error.ErrorType);
+            Assert.AreEqual("Unsupported compute type.", error.ErrorName);
+            Assert.AreEqual("This API is not supported on the current compute type.", error.ErrorMessage);
+        }
     }
 }
