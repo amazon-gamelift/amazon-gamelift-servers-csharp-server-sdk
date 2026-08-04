@@ -35,7 +35,11 @@ namespace Aws.GameLift.Server
         private const string GaugeMetricType = "g";
         private const string TimingMetricType = "ms";
 
+#if ENABLE_IL2CPP
+        private static readonly ILog Log = new UnityDebugLog();
+#else
         private static readonly ILog Log = LogManager.GetLogger(typeof(StatsDClient));
+#endif
 
         private readonly IUdpClientWrapper udpClient;
         private const string FixedPrefix = "server"; // All metrics share this fixed prefix.

@@ -28,7 +28,11 @@ namespace Aws.GameLift.Server.Model
     /// </summary>
     public class MatchmakerData
     {
+#if ENABLE_IL2CPP
+        public static ILog Log { get; set; } = new UnityDebugLog();
+#else
         public static ILog Log { get; set; } = LogManager.GetLogger(typeof(MatchmakerData));
+#endif
 
         public string MatchId { get; set; }
 
