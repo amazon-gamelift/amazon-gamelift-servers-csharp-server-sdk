@@ -67,7 +67,11 @@ namespace Aws.GameLift.Server
 
         public static ServerState Instance { get; } = new ServerState();
 
+#if ENABLE_IL2CPP
+        public static ILog Log { get; } = new UnityDebugLog();
+#else
         public static ILog Log { get; } = LogManager.GetLogger(typeof(ServerState));
+#endif
 
         public ServerState(IGameLiftWebSocket webSocket, GameLiftWebSocketRequestHandler requestHandler, IEnvironmentWrapper envWrapper)
         {

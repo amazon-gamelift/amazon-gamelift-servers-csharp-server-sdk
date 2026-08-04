@@ -23,7 +23,11 @@ namespace Aws.GameLift.Server.Model.Metrics
     /// </summary>
     public class MetricBase : IMetric
     {
+#if ENABLE_IL2CPP
+        private static readonly ILog Log = new UnityDebugLog();
+#else
         private static readonly ILog Log = LogManager.GetLogger(typeof(MetricBase));
+#endif
 
         private readonly Dictionary<string, Tag> tags;
         private readonly object sampleLock = new object();
