@@ -26,7 +26,11 @@ namespace Aws.GameLift.Server
 
         private readonly IGameLiftWebSocket gameLiftWebSocket;
 
+#if ENABLE_IL2CPP
+        public static ILog Log { get; } = new UnityDebugLog();
+#else
         public static ILog Log { get; } = LogManager.GetLogger(typeof(GameLiftWebSocketRequestHandler));
+#endif
 
         // Empty constructor needed for testing.
         public GameLiftWebSocketRequestHandler()

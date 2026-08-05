@@ -36,7 +36,11 @@ namespace Aws.GameLift.Server
 
         private readonly HttpClient httpClient;
 
+#if ENABLE_IL2CPP
+        private static ILog Log { get; } = new UnityDebugLog();
+#else
         private static ILog Log { get; } = LogManager.GetLogger(typeof(ServerState));
+#endif
 
         public CrashReporterClient(string host, int port)
         {

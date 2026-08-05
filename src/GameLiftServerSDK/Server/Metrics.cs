@@ -81,7 +81,11 @@ namespace Aws.GameLift.Server
         /// </summary>
         private bool isDisposing;
 
+#if ENABLE_IL2CPP
+        private static readonly ILog Log = new UnityDebugLog();
+#else
         private static readonly ILog Log = LogManager.GetLogger(typeof(Metrics));
+#endif
 
         /// <summary>
         /// Maintains the 'up' gauge to indicate if the server is up (1) or down (0).

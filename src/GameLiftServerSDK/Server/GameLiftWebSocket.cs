@@ -52,7 +52,11 @@ namespace Aws.GameLift.Server
         private const string IdempotencyTokenKey = "IdempotencyToken";
         private const string SocketClosingErrorMessage = "An error has occurred in closing the connection";
 
+#if ENABLE_IL2CPP
+        private static readonly ILog Log = new UnityDebugLog();
+#else
         private static readonly ILog Log = LogManager.GetLogger(typeof(GameLiftWebSocket));
+#endif
 
         private readonly int maxConnectRetries;
         private readonly int maxWaitForConnectedRetries;

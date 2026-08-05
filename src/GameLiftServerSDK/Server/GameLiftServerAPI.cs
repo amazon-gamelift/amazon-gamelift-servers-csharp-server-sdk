@@ -19,7 +19,7 @@ namespace Aws.GameLift.Server
     public static class GameLiftServerAPI
 #pragma warning restore S101
     {
-        private const string SdkVersion = "5.5.0";
+        private const string SdkVersion = "5.5.1";
 
         /// <summary>
         /// Returns the current version number of the SDK built into the server process.

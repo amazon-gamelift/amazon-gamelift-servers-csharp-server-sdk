@@ -1,0 +1,2 @@
+- Fixes SDK logging on Unity IL2CPP builds.
+- Upgrades log4net dependency to 3.3.0.

@@ -32,7 +32,7 @@ namespace Aws.GameLift.Tests.Server
     [TestFixture]
     public class ServerStateTest
     {
-        private const string SdkVersion = "5.5.0";
+        private const string SdkVersion = "5.5.1";
         private const string SdkToolName = "testSdkToolName";
         private const string SdkToolVersion = "1.0.0";
         private const string EnvironmentVariableWebsocketUrl = "GAMELIFT_SDK_WEBSOCKET_URL";

@@ -30,7 +30,11 @@ namespace Aws.GameLift.Server
         private const int DefaultStatsdDPortNumber = 8125; // Default StatsD port
         private const int DefaultPacketSize = 512; // Default StatsD packet size
 
+#if ENABLE_IL2CPP
+        private static readonly ILog Log = new UnityDebugLog();
+#else
         private static readonly ILog Log = LogManager.GetLogger(typeof(MetricsBuilder));
+#endif
 
         // Suppress IDE0028: Collection initialization can be simplified
         // We need to use explicit type initialization for .NET Framework 4.6.2 compatibility

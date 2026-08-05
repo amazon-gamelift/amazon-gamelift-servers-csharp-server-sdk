@@ -22,7 +22,11 @@ namespace Aws.GameLift.Server.Model
     {
         private const int MaxPlayerSessions = 1024;
 
+#if ENABLE_IL2CPP
+        public static ILog Log { get; } = new UnityDebugLog();
+#else
         public static ILog Log { get; } = LogManager.GetLogger(typeof(ServerState));
+#endif
 
         public string NextToken { get; set; }
 
