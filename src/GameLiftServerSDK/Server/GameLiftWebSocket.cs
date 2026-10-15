@@ -72,6 +72,7 @@ namespace Aws.GameLift.Server
         private readonly object socketLock = new object();
         private WebSocket socket;
         private CancellationTokenSource socketConnectCancellationSource;
+        private SocketConnectAttempt pendingConnectAttempt;
 
         public GameLiftWebSocket(IWebSocketMessageHandler handler, int maxConnectRetries = MaxConnectRetriesDefault, int maxWaitForConnectedRetries = MaxWaitForConnectedRetriesDefault)
         {
@@ -107,6 +108,7 @@ namespace Aws.GameLift.Server
             WebSocket oldSocket;
             lock (socketLock)
             {
+                pendingConnectAttempt?.Abandon();
                 oldSocket = socket;
                 socket = null;
             }
@@ -295,7 +297,17 @@ namespace Aws.GameLift.Server
         {
             outSocket = null;
 
+            // A timed-out handshake cannot safely be interrupted inside websocket-sharp.
+            // Keep at most one connection worker until it finishes and cleans up.
+            if (pendingConnectAttempt != null && pendingConnectAttempt.IsRunning)
+            {
+                Log.Debug("Waiting for the previous websocket connection attempt to finish");
+                return new GenericOutcome(new GameLiftError(GameLiftErrorType.WEBSOCKET_CONNECT_FAILURE_TIMEOUT));
+            }
+
             var newSocket = new WebSocket(CreateUri(idempotencyToken));
+            var attempt = new SocketConnectAttempt(newSocket.Connect, newSocket.Close);
+            var cancellationToken = socketConnectCancellationSource.Token;
             Log.Debug($"Socket {newSocket.GetHashCode():X} created");
 
             // re-route websocket-sharp logs to use the SDK logger
@@ -314,11 +326,21 @@ namespace Aws.GameLift.Server
 
             newSocket.OnOpen += (sender, e) =>
             {
+                if (attempt.IsAbandoned || cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 Log.Info($"Socket {sender.GetHashCode():X} connected to Amazon GameLift Servers WebSocket.");
             };
 
             newSocket.OnClose += (sender, e) =>
             {
+                if (attempt.IsAbandoned || cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 Log.InfoFormat($"Socket {sender.GetHashCode():X} disconnected. Status Code: {e.Code}. Reason: {e.Reason}");
 
                 if (e.Code == (ushort) CloseStatusCode.ProtocolError)
@@ -355,8 +377,8 @@ namespace Aws.GameLift.Server
                     default:
                         // Only attempt to schedule a reconnect if a reconnect is not already running and this OnClose
                         // handler was for the current socket
-                        // This has to be run in a Task thread because OnClose runs in the PerformConnect thread when
-                        // the thread is interrupted which can cause a deadlock.
+                        // Run asynchronously because the caller may still hold socketLock
+                        // while waiting for the connection worker to complete.
                         Task.Run(() =>
                         {
                             lock (socketLock)
@@ -382,6 +404,11 @@ namespace Aws.GameLift.Server
 
             newSocket.OnError += (sender, e) =>
             {
+                if (attempt.IsAbandoned || cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 if (e.Message != null && e.Message.Contains(SocketClosingErrorMessage))
                 {
                     Log.Warn("WebSocket reported error on closing connection. This may be because the connection is already closed");
@@ -394,6 +421,13 @@ namespace Aws.GameLift.Server
 
             newSocket.OnMessage += (sender, e) =>
             {
+                // An expired attempt must never deliver GameLift commands, even if its
+                // handshake succeeds after the caller has moved on or disconnected.
+                if (attempt.IsAbandoned || cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 if (e.IsPing)
                 {
                     Log.Debug("Received ping from Amazon GameLift Servers WebSocket.");
@@ -515,24 +549,25 @@ namespace Aws.GameLift.Server
             };
 
             // Attempt to connect the socket
-            var wasSuccessful = SocketConnectWithTimeout(newSocket);
-            if (!wasSuccessful)
+            pendingConnectAttempt = attempt;
+            attempt.Start();
+            var timeout = TimeSpan.FromMilliseconds(ConnectSocketTimeoutMilliseconds);
+            if (!attempt.Wait(timeout))
             {
-                // Wait for countdown latch to be resolved in OnClose() in order to know the connection error type
-                onCloseCountdownEvent.Wait();
+                Log.Warn($"Socket {newSocket.GetHashCode():X} failed to connect within {timeout.TotalMilliseconds} ms");
+                return new GenericOutcome(new GameLiftError(GameLiftErrorType.WEBSOCKET_CONNECT_FAILURE_TIMEOUT));
+            }
 
-                try
+            if (attempt.Error != null || !newSocket.IsAlive || cancellationToken.IsCancellationRequested)
+            {
+                // OnClose is normally raised synchronously by Connect. Do not wait
+                // indefinitely if the library throws without raising that callback.
+                if (attempt.Error == null && !cancellationToken.IsCancellationRequested)
                 {
-                    if (newSocket.ReadyState != WebSocketState.Closed)
-                    {
-                        newSocket.CloseAsync(CloseStatusCode.Normal);
-                    }
-                }
-                catch (Exception e)
-                {
-                    Log.Warn("Failed to close new websocket after a connection failure, ignoring", e);
+                    onCloseCountdownEvent.Wait(TimeSpan.FromMilliseconds(DisconnectWaitStepMillis));
                 }
 
+                CloseSocketAsync(newSocket);
                 return new GenericOutcome(new GameLiftError(connectionErrorType));
             }
 
@@ -541,31 +576,96 @@ namespace Aws.GameLift.Server
             return new GenericOutcome();
         }
 
-        /**
-         * The socket library Connect() call does not implement any cancellation or timeout logic and blocks
-         * indefinitely when a connection is not immediately successful. This function uses thread interrupts to
-         * effectively implement timeout logic.
-         *
-         * Returns whether the socket is connected
-         */
-        private bool SocketConnectWithTimeout(WebSocket newSocket)
+        // websocket-sharp's WaitForResult throws task.Exception after an interrupted
+        // wait, even when it is null. On IL2CPP this can cause a native SIGSEGV.
+        // Expire the attempt without interrupting its worker, then close it when
+        // Connect eventually returns. A dedicated background thread avoids blocking
+        // the thread pool or preventing process exit on a stalled handshake.
+        internal sealed class SocketConnectAttempt
         {
-            // Create and start a new thread that runs Connect
-            var thread = new Thread(newSocket.Connect);
-            thread.Start();
+            private readonly object completionLock = new object();
+            private readonly Thread thread;
+            private bool completed;
+            private bool abandoned;
 
-            // Wait for timeout for the Connect call in the thread to complete
-            var timeout = TimeSpan.FromMilliseconds(ConnectSocketTimeoutMilliseconds);
-            var threadCompleted = thread.Join(timeout);
-            if (!threadCompleted)
+            internal SocketConnectAttempt(Action connect, Action close)
             {
-                // If the thread did not complete within the timeout, interrupt the thread and wait for it to complete
-                Log.Warn($"Socket {newSocket.GetHashCode():X} failed to connect within {timeout.TotalMilliseconds} ms");
-                thread.Interrupt();
-                thread.Join();
+                thread = new Thread(() =>
+                {
+                    try
+                    {
+                        connect();
+                    }
+                    catch (Exception e)
+                    {
+                        Error = e;
+                        Log.Warn("Websocket connection worker failed", e);
+                    }
+                    finally
+                    {
+                        bool closeAbandonedSocket;
+                        lock (completionLock)
+                        {
+                            completed = true;
+                            closeAbandonedSocket = abandoned;
+                        }
+
+                        if (closeAbandonedSocket)
+                        {
+                            try
+                            {
+                                close();
+                            }
+                            catch (Exception e)
+                            {
+                                Log.Warn("Failed to close abandoned websocket", e);
+                            }
+                        }
+                    }
+                }) { IsBackground = true };
             }
 
-            return newSocket.IsAlive;
+            internal Exception Error { get; private set; }
+            internal bool IsRunning => thread.IsAlive;
+
+            internal bool IsAbandoned
+            {
+                get { lock (completionLock) { return abandoned; } }
+            }
+
+            internal void Start() => thread.Start();
+
+            internal bool Wait(TimeSpan timeout)
+            {
+                if (thread.Join(timeout))
+                {
+                    return true;
+                }
+
+                lock (completionLock)
+                {
+                    // Resolve completion versus timeout under the same lock so
+                    // either the caller owns the socket or the worker closes it.
+                    if (completed)
+                    {
+                        return !abandoned;
+                    }
+
+                    abandoned = true;
+                    return false;
+                }
+            }
+
+            internal void Abandon()
+            {
+                lock (completionLock)
+                {
+                    if (!completed)
+                    {
+                        abandoned = true;
+                    }
+                }
+            }
         }
 
         private string CreateUri(string idempotencyToken)

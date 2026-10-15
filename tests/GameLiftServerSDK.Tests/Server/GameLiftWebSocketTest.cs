@@ -50,6 +50,43 @@ namespace Aws.GameLift.Tests.Server
         }
 
         [Test]
+        public void GIVEN_stalledTlsHandshake_WHEN_connectTimesOut_THEN_failureReturnsWithoutInterruptingOrStartingAnotherWorker()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            TcpClient peer = null;
+            try
+            {
+                var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                var accepting = listener.AcceptTcpClientAsync();
+                using (var webSocket = new GameLiftWebSocket(mockServerState.Object, 0))
+                {
+                    // Accept TCP but never reply to the TLS handshake. The connection
+                    // task stays pending beyond the SDK's two-second timeout.
+                    var connecting = Task.Run(() => webSocket.Connect($"wss://127.0.0.1:{port}/"));
+                    Assert.IsTrue(accepting.Wait(DEFAULT_WAIT_TIME));
+                    peer = accepting.Result;
+                    Assert.IsTrue(connecting.Wait(DEFAULT_WAIT_TIME), "A stalled TLS peer must not block Connect");
+                    Assert.IsFalse(connecting.Result.Success);
+                    Assert.AreEqual(GameLiftErrorType.WEBSOCKET_CONNECT_FAILURE_TIMEOUT, connecting.Result.Error.ErrorType);
+                    Assert.IsFalse(webSocket.IsConnected());
+
+                    // The original worker is still blocked. A second Connect must
+                    // fail promptly without opening another TCP connection.
+                    var retrying = Task.Run(() => webSocket.Connect($"wss://127.0.0.1:{port}/"));
+                    Assert.IsTrue(retrying.Wait(DEFAULT_WAIT_TIME));
+                    Assert.IsFalse(retrying.Result.Success);
+                    Assert.IsFalse(listener.Pending(), "Only one pending connection worker is allowed");
+                }
+            }
+            finally
+            {
+                peer?.Close();
+                listener.Stop();
+            }
+        }
+
+        [Test]
         public void GIVEN_serverConnected_WHEN_webSocketConnect_THEN_webSocketIsConnected()
         {
             using (var echoHttpServer = new EchoHttpServer())
