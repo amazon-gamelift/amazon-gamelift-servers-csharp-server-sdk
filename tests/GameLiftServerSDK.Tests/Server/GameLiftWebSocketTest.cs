@@ -11,8 +11,14 @@
 */
 
 using System;
+using System.IO;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -395,6 +401,192 @@ namespace Aws.GameLift.Tests.Server
         {
             mockServerState.Verify(p => p.OnSuccessResponse(DEFAULT_SUCCESS_RESPONSE_MESSAGE.RequestId), times);
         }
+
+        [Test]
+        public void GIVEN_noSslPolicyErrors_WHEN_validateServerCertificate_THEN_returnsTrue()
+        {
+            Assert.IsTrue(GameLiftWebSocket.ValidateServerCertificate(null, null, null, SslPolicyErrors.None));
+        }
+
+        [TestCase(SslPolicyErrors.RemoteCertificateNotAvailable)]
+        [TestCase(SslPolicyErrors.RemoteCertificateNameMismatch)]
+        [TestCase(SslPolicyErrors.RemoteCertificateChainErrors)]
+        [TestCase(SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateChainErrors)]
+        public void GIVEN_sslPolicyErrors_WHEN_validateServerCertificate_THEN_returnsFalse(SslPolicyErrors sslPolicyErrors)
+        {
+            Assert.IsFalse(GameLiftWebSocket.ValidateServerCertificate(null, null, null, sslPolicyErrors));
+        }
+
+#if !NETFRAMEWORK
+        // .NET Framework 4.6.2 has no CertificateRequest, so these tests use a generated certificate only on .NET.
+
+        // Each certificate is self-signed, so the platform also reports RemoteCertificateChainErrors. The unit tests of
+        // ValidateServerCertificate above cover a host name mismatch alone.
+        [Test]
+        public void GIVEN_selfSignedServerCertificateForOtherHost_WHEN_webSocketConnect_THEN_connectFailsAndAuthTokenNotSent()
+        {
+            AssertConnectRejectedForCertificate("definitely-not-amazongamelift.invalid");
+        }
+
+        [Test]
+        public void GIVEN_untrustedSelfSignedServerCertificateForHost_WHEN_webSocketConnect_THEN_connectFailsAndAuthTokenNotSent()
+        {
+            AssertConnectRejectedForCertificate("localhost");
+        }
+
+        private void AssertConnectRejectedForCertificate(string certificateHostName)
+        {
+            // GIVEN
+            const int noConnectRetries = 0;
+            const string authToken = "test-auth-token";
+            using (var certificate = CreateSelfSignedCertificate(certificateHostName))
+            using (var tlsServer = new TlsRequestCaptureServer(certificate))
+            using (var webSocket = new GameLiftWebSocket(mockServerState.Object, noConnectRetries))
+            {
+                // WHEN
+                var outcome = webSocket.Connect(tlsServer.WebSocketUrl, "processId", "hostId", "fleetId", authToken, null);
+
+                // THEN
+                Assert.IsFalse(outcome.Success, "Connect must fail when the server certificate is not valid");
+                Assert.IsFalse(webSocket.IsConnected(), "WebSocket must not be connected");
+                Assert.IsTrue(tlsServer.WaitForTlsAttempt(DEFAULT_WAIT_TIME), "The client must start a TLS handshake with the server");
+                Assert.IsNull(tlsServer.ReceivedRequest,
+                    "The client must reject the certificate before it sends the upgrade request, so the auth token never " +
+                    $"reaches the server. Received request: {tlsServer.ReceivedRequest}");
+            }
+        }
+
+        private static X509Certificate2 CreateSelfSignedCertificate(string hostName)
+        {
+            using (var rsa = RSA.Create(2048))
+            {
+                var request = new CertificateRequest($"CN={hostName}", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                var subjectAlternativeNames = new SubjectAlternativeNameBuilder();
+                subjectAlternativeNames.AddDnsName(hostName);
+                request.CertificateExtensions.Add(subjectAlternativeNames.Build());
+                request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
+                    new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }, false)); // Server authentication
+
+                using (var ephemeral = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1)))
+                {
+                    // Round-trip through PFX so that SslStream can use the private key on every OS.
+                    var pfx = ephemeral.Export(X509ContentType.Pfx);
+#if NET9_0_OR_GREATER
+                    return X509CertificateLoader.LoadPkcs12(pfx, null);
+#else
+                    return new X509Certificate2(pfx);
+#endif
+                }
+            }
+        }
+
+        /**
+         * TLS server that the websocket can connect to for unit testing certificate validation.
+         * It accepts TLS connections with the given certificate and records the first HTTP request it receives
+         * (the websocket upgrade request, which carries the auth token). It never completes the websocket upgrade.
+         * The server starts when it is constructed and stops when it is disposed.
+         */
+        private sealed class TlsRequestCaptureServer : IDisposable
+        {
+            private const int MaxRequestBytes = 16 * 1024;
+            private readonly X509Certificate2 certificate;
+            private readonly TcpListener listener;
+            private readonly ManualResetEventSlim tlsAttempted = new ManualResetEventSlim(false);
+            private volatile string receivedRequest;
+
+            public TlsRequestCaptureServer(X509Certificate2 certificate)
+            {
+                this.certificate = certificate;
+                listener = new TcpListener(IPAddress.Loopback, 0);
+                listener.Start();
+                Port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                Task.Run(AcceptLoop);
+            }
+
+            public int Port { get; }
+
+            public string WebSocketUrl => $"wss://localhost:{Port}/";
+
+            // The HTTP request received after a successful TLS handshake, or null if there was none
+            public string ReceivedRequest => receivedRequest;
+
+            public bool WaitForTlsAttempt(TimeSpan timeout)
+            {
+                return tlsAttempted.Wait(timeout);
+            }
+
+            public void Dispose()
+            {
+                listener.Stop();
+                tlsAttempted.Dispose();
+            }
+
+            private void AcceptLoop()
+            {
+                while (true)
+                {
+                    TcpClient client;
+                    try
+                    {
+                        client = listener.AcceptTcpClient();
+                    }
+                    catch (Exception)
+                    {
+                        return; // Listener stopped
+                    }
+
+                    using (client)
+                    using (var sslStream = new SslStream(client.GetStream(), false))
+                    {
+                        try
+                        {
+                            client.ReceiveTimeout = (int)DEFAULT_WAIT_TIME.TotalMilliseconds;
+                            sslStream.AuthenticateAsServer(certificate, false, SslProtocols.Tls12, false);
+                            receivedRequest = ReadRequest(sslStream);
+                        }
+                        catch (Exception)
+                        {
+                            // The client aborted the TLS handshake or closed the connection
+                        }
+                        finally
+                        {
+                            SignalTlsAttempted();
+                        }
+                    }
+                }
+            }
+
+            private void SignalTlsAttempted()
+            {
+                try
+                {
+                    tlsAttempted.Set();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The server was disposed while the connection was open
+                }
+            }
+
+            private static string ReadRequest(Stream stream)
+            {
+                var request = new StringBuilder();
+                var buffer = new byte[1024];
+                while (request.Length < MaxRequestBytes && !request.ToString().Contains("\r\n\r\n"))
+                {
+                    var read = stream.Read(buffer, 0, buffer.Length);
+                    if (read <= 0)
+                    {
+                        break;
+                    }
+
+                    request.Append(Encoding.ASCII.GetString(buffer, 0, read));
+                }
+
+                return request.Length == 0 ? null : request.ToString();
+            }
+        }
+#endif
 
         private static bool SendMessageSuccess(IGameLiftWebSocket webSocket)
         {
