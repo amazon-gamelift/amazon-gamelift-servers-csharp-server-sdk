@@ -12,8 +12,8 @@ Steps:
 
 1. Open `GameLiftServerSDK.sln` solution in [Visual Studio](https://visualstudio.microsoft.com/) or [Rider](https://www.jetbrains.com/rider/)
 2. Restore NuGet packages
-3. Configure **Target Framework** to `.NET 8`, `.NET 6`, or `.NET 4.6.2`
-4. Configure **MSBuild version** to 17.0 if the **Target Framework** is `.NET 6` or 17.8 for `.NET 8`
+3. Configure **Target Framework** to `.NET 10`, `.NET 8`, `.NET 6`, or `.NET 4.6.2`
+4. Configure **MSBuild version** to 17.0 if the **Target Framework** is `.NET 6`, 17.8 for `.NET 8`, or 18.0 for `.NET 10`
 5. Configure **Platform** to specify the processor architecture you want to build your game server for. Set to `x64` for Intel processors, or `arm64` for Arm-based processors
 6. Build project
 7. Locate the build artifacts in `bin/` directory
@@ -173,3 +173,28 @@ This SDK enables the feature to collect and ship telemetry metrics from your gam
 AWS services for monitoring and observability. For detailed setup and usage instructions, see [METRICS.md](./telemetry-metrics/METRICS.md).
 
 ![Telemetry Metrics on Amazon Grafana Dashboard](./telemetry-metrics/telemetry_metrics.png)
+
+## Common Issues
+
+### Rejected the TLS certificate of the Amazon GameLift Servers WebSocket
+
+```
+Rejected the TLS certificate of the Amazon GameLift Servers WebSocket. SSL policy errors: 'RemoteCertificateChainErrors'.
+```
+
+* **Cause**: The server SDK verifies the certificate of the Amazon GameLift Servers WebSocket endpoint. It checks that
+  the certificate chain ends in a root certificate authority (CA) that the host trusts, and that the certificate
+  matches the host name in the WebSocket URL. The SDK uses the trust store of the operating system. Verification fails
+  if the host or container doesn't trust the root CAs of the endpoint (for example, a minimal Linux image without
+  CA certificates), if a TLS-inspecting proxy re-signs the connection with its own CA, or if the WebSocket URL doesn't
+  match the endpoint. The SDK logs the SSL policy errors and the subject of the certificate that it rejected.
+  `InitSDK()` then returns a `WEBSOCKET_CONNECT_FAILURE` error.
+* **Mitigation**:
+  * Make sure the trust store of the host contains Amazon Root CA 1 or Starfield Services Root Certificate Authority -
+    G2. If a proxy re-signs the connection, also add the CA of the proxy. You can download the Amazon root CAs from the
+    [Amazon Trust Services repository](https://www.amazontrust.com/repository/).
+  * Linux: install the CA certificates package of your distribution, for example `ca-certificates`. Alternatively, set
+    the `SSL_CERT_FILE` environment variable to a PEM file, or the `SSL_CERT_DIR` environment variable to a directory of
+    PEM files, that contains the CAs to trust.
+  * Windows and macOS: add the CAs to the certificate store of the operating system.
+  * Make sure the WebSocket URL that you pass to `InitSDK()` is the WebSocket endpoint of Amazon GameLift Servers.
