@@ -12,6 +12,8 @@
 
 using System;
 using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -308,6 +310,10 @@ namespace Aws.GameLift.Server
             // Socket connection failed during handshake for TLS errors without this protocol enabled
             newSocket.SslConfiguration.EnabledSslProtocols = System.Security.Authentication.SslProtocols.Tls12;
 
+            // websocket-sharp accepts every server certificate by default. Validate the certificate chain and host name
+            // so that the auth token is only sent to the real Amazon GameLift Servers endpoint.
+            newSocket.SslConfiguration.ServerCertificateValidationCallback = ValidateServerCertificate;
+
             // Countdown latch to ensure that InitSDK() failure response waits for onClose() in order to return an error type 
             CountdownEvent onCloseCountdownEvent = new CountdownEvent(1);
             GameLiftErrorType connectionErrorType = GameLiftErrorType.WEBSOCKET_CONNECT_FAILURE;
@@ -566,6 +572,25 @@ namespace Aws.GameLift.Server
             }
 
             return newSocket.IsAlive;
+        }
+
+        /**
+         * TLS server certificate validation for the websocket connection. Accepts the certificate only when the
+         * platform reports no SSL policy errors: the chain builds to a trusted root and the certificate matches the
+         * websocket host name.
+         */
+        internal static bool ValidateServerCertificate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
+        {
+            if (sslPolicyErrors == SslPolicyErrors.None)
+            {
+                return true;
+            }
+
+            Log.ErrorFormat("Rejected the TLS certificate of the Amazon GameLift Servers WebSocket. SSL policy errors: '{0}'. " +
+                            "Certificate subject: '{1}'. Please verify that the websocket url in InitSDK() is correct and " +
+                            "that the host trusts the certificate authority of the endpoint.",
+                sslPolicyErrors, certificate?.Subject);
+            return false;
         }
 
         private string CreateUri(string idempotencyToken)

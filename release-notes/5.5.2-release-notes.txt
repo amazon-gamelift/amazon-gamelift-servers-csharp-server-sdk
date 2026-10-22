@@ -1,0 +1,2 @@
+- Adds support for .NET 10 as a target framework.
+- Includes security improvements to the WebSocket connection to Amazon GameLift Servers.
